@@ -7,14 +7,18 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 SRC_URI = "file://openqti.c \
            file://openqti.h \
-           file://audio.h \
-           file://audio.c \
+           file://alsa_audio.h \
+           file://alsa_ucm.h \
+           file://mdm9607_use_cases.h \
+           file://alsa_pcm.c \
+           file://alsa_mixer.c \
+           file://alsa_ucm.c \
            file://init_openqti"
 
 S = "${WORKDIR}"
 
 do_compile() {
-    ${CC} ${LDFLAGS} audio.c openqti.c -o openqti
+    ${CC} ${LDFLAGS} alsa_mixer.c alsa_pcm.c alsa_ucm.c openqti.c -o openqti -lpthread
 }
 
 do_install() {

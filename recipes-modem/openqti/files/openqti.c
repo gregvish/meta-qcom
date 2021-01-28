@@ -8,10 +8,10 @@
 #include <sys/time.h>
 #include <fcntl.h>
 #include <termios.h>
-#include "openqti.h"
-#include "audio.h"
 #include <errno.h>
-
+#include "openqti.h"
+#include "alsa_audio.h"
+#include "alsa_ucm.h"
 /*
  *Dead simple QTI daemon
  */
@@ -52,26 +52,62 @@ void handle_pkt_action(char *pkt) {
 	}
 }
 
-void prepare_audio() {
-	struct mixer *mixer;
+void prepare_audio(struct mixer *mixer) {
     struct mixer_ctl *ctltx;
     struct mixer_ctl *ctlrx;
 	struct mixer_ctl *afe;
 
-    unsigned value;
     int r;
 	const char* dev = "/dev/snd/controlC0";
 	char rxctl[] = "SEC_AUX_PCM_RX_Voice Mixer VoLTE";
 	char txctl[] = "VoLTE_Tx Mixer SEC_AUX_PCM_TX_VoLTE";
 	char afectl[] = "SEC_AUXPCM_RX Port Mixer SEC_AUX_PCM_UL_TX";
 	printf(" Open mixer \n");
-    if (!mixer){
+  /*  if (!mixer){
         fprintf(stderr,"error opening mixer! %s: %d\n", strerror(errno), __LINE__);
         return;
     }
     mixer_dump(mixer);
+	mixer_close(mixer);*/
+	const char **list = NULL , *str = NULL;
+    long lval;
+    int err, i;
+    char *command = NULL;
+    int count = 0;
+    char *identifier = "snd_soc_msm_9x07_Tomtom_I2S";
+    struct cmd *cmd = NULL;
+	char value[] = "1";
+	snd_use_case_mgr_t *uc_mgr;
+	err = snd_use_case_card_list(&list);
+        if (err < 0) {
+            fprintf(stderr, "%s: error failed to get card list: %d\n", __func__, err);
+            return err;
+        }
+        if (err == 0) {
+            printf("list is empty\n");
+            return;
+        }
+		printf("we have a list of %i\n", err);
+        for (i = 0; i < err; i++)
+            printf("  %i: %s\n", i+1, list[i]);
+        snd_use_case_free_list(list, err);
+	
+		err = snd_use_case_mgr_open(&uc_mgr, identifier);
+    
+	    err = snd_use_case_get(uc_mgr, identifier, &str);
+        if (err < 0) {
+            fprintf(stderr, "%s: error failed to get %s: %d\n", __func__, identifier, err);
+        }
+        if (str != NULL)
+            printf("  %s=%s\n", identifier, str);
+
+        err = snd_use_case_set(uc_mgr, identifier, "Play VoLTE");
+        if (err < 0) {
+            fprintf(stderr, "%s: error failed to set %s=%s: %d\n", __func__, identifier, value, err);
+        }
 
 	// Enable backend DAIs
+/*
 	printf("Get control: TX \n");
 	ctltx = get_ctl(mixer, txctl);
 	printf("Get control: RX \n");
@@ -93,9 +129,8 @@ void prepare_audio() {
 	r = mixer_ctl_set_value(afe, 1, 1);
 	if (r < 0) {
 		printf("Failed to set AFE\n");
-	}
+	}*/
 	
-    mixer_close(mixer);
 	/* Sleep while waiting for /dev/snd/controlC0, the DSP might need a little while to finish starting when this is called 
 	 *	Once controlC0 is ready, we can open the config file snd_soc_msm_9x07_Tomtom_I2S and look for the call or VoLTE call 
 	 *	verbs
@@ -144,24 +179,23 @@ int dump_audio_mixer() {
 }
 int main(int argc, char **argv) {
 	/* Descriptors */
-	int diagfd = -1;
-	int smem_logfd = -1;
-	int rmnet_ctrlfd = -1;
-	int dpl_cntlfd = -1;
-	int smdcntl8_fd = -1;
-	int ipc_router_socket = -1;
+	int diagfd = -1; // /dev/diag
+	int smem_logfd = -1; // /dev/smem_log
+	int rmnet_ctrlfd = -1; // /dev/rmnet_ctl
+	int dpl_cntlfd = -1; // /dev/dpl_cntl
+	int smdcntl8_fd = -1; // /dev/sndcntl8
+	int ipc_router_socket = -1; // AF_IB, 27 / 38
  	struct peripheral_ep_info epinfo;
   	struct sockaddr_msm_ipc ipc_socket_addr;
 	bool debug = false; // Dump usb packets
 	bool bypass_mode = false; // After setting it up, shutdown USB and restart it in SMD mode
-	char buf[4096] = "\0";
+//	char buf[4096] = "\0";
 	char diagbuf[TRACED_DIAG_SZ];
 	char rmnetbuf[MAX_PACKET_SIZE] = "\0";
-
+	struct mixer *mixer; // ALSA mixer
 	/* QMI messages to request opening smdcntl8 */
   	char qmi_msg_01[] = { 0x00, 0x01, 0x00, 0x21, 0x00, 0x1c, 0x00, 0x10, 0x0d, 0x00, 0x01, 0x0b, 0x44, 0x41, 0x54, 0x41, 0x34, 0x30, 0x5f, 0x43, 0x4e, 0x54, 0x4c, 0x11, 0x09, 0x00, 0x01, 0x05, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00 };
 	char qmi_msg_02[] = { 0x00, 0x02, 0x00, 0x20, 0x00, 0x2c, 0x00, 0x10, 0x15, 0x00, 0x01, 0x0b, 0x44, 0x41, 0x54, 0x41, 0x34, 0x30, 0x5f, 0x43, 0x4e, 0x54, 0x4c, 0x05, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x11, 0x11, 0x00, 0x01, 0x05, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-	char bufsck[4096];
 	unsigned int rmtmask = 0;	// mask looks like 0 in ghidra, and looks like 0 from the strace too
 	int ret;
 	int pret;
@@ -193,13 +227,15 @@ int main(int argc, char **argv) {
 	 */
 	printf("OpenQTI %s \n", VERSION);
 	printf("--------------\n");
-	while ((c = getopt (argc, argv, "adb")) != -1)
+	while ((c = getopt (argc, argv, "abdp")) != -1)
 		switch (c) {
 		case 'a':
 			printf("Dump audio mixer data \n");
 			return dump_audio_mixer();
 			break;
- 
+		case 'p':
+			printf("PCM devs: not done\n");
+			break;
 		case 'd':
 			printf("Debug mode\n");
 			debug = true;
@@ -212,6 +248,8 @@ int main(int argc, char **argv) {
 			break;
 		case '?':
 			printf("Options:\n");
+			printf(" -a: Print all the mixers\n");
+			printf(" -p: Print all PCM devices\n"); 
 			printf(" -d: Debug packets passing through SMD and RMNET\n");
 			printf(" -b: Bypass mode (initialize and change usb mode to SMD,BAM_DMUX)\n");
 			return 1;
@@ -234,7 +272,7 @@ int main(int argc, char **argv) {
 	 * does, though it's probably unnecessary
 	 */
 	do {
-		memset(buf, 0, TRACED_DIAG_SZ);
+		memset(diagbuf, 0, TRACED_DIAG_SZ);
 		ret = read(diagfd, diagbuf, TRACED_DIAG_SZ);
 	} while (ret != 8232);
 
@@ -308,7 +346,7 @@ int main(int argc, char **argv) {
 	ret = ioctl(rmnet_ctrlfd, MODEM_ONLINE);
 	printf("Set modem online (set DTR high): %i \n", ret);
 
-	prepare_audio();
+	prepare_audio(mixer);
 
 	// Should we proxy USB?
 	if (!bypass_mode) {
@@ -350,5 +388,8 @@ int main(int argc, char **argv) {
   	sleep(5);
   	system("echo 1 > /sys/class/android_usb/android0/enable");
   }
+
+  // Close the mixer before exiting
+ // mixer_close(mixer);
   return 0;
 }
